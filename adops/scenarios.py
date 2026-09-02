@@ -85,6 +85,10 @@ class Scenario:
     eval_include: bool = True
     # entities where a correct intervention would land; evaluation-only, never shown
     on_target_entities: List[str] = field(default_factory=list)
+    # the hierarchy level at which the TRUE defect lives -- "creative", "ad_set" or
+    # "none" (no defect). Evaluation-only; used by evaluate.py to score whether a
+    # policy identified the actual mechanism, not merely an entity in its vicinity.
+    mechanism_level: str = "none"
 
 
 def _objective(target_cpa: float, daily_total: float, horizon: int = 6) -> Objective:
@@ -144,6 +148,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "without fixing efficiency."),
         correct_action_family=["pause_creative:cr_broad_a", "creative_test:as_broad"],
         on_target_entities=["cr_broad_a", "as_broad"],
+        mechanism_level="creative",
         objective=_objective(37.0, 480.0),
         budget_overrides={"as_broad": 150.0, "as_interior": 60.0, "as_seas_broad": 43.0},
         # as_broad's capacity is raised to match its larger budget, so the only defect
@@ -159,6 +164,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "Both creatives are healthy -- pausing one does not help."),
         correct_action_family=["cut_budget:as_cart"],
         on_target_entities=["as_cart"],
+        mechanism_level="ad_set",
         objective=_objective(41.0, 530.0),
         budget_overrides={"as_cart": 95.0},
         ad_set_overrides={"as_cart": dict(decay=0.80)},
@@ -171,6 +177,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "signal is purely cross-sectional and statistically detectable."),
         correct_action_family=["shift_budget:as_interior->as_lal"],
         on_target_entities=["as_interior", "as_lal"],
+        mechanism_level="ad_set",
         objective=_objective(39.0, 495.0),
         budget_overrides={"as_lal": 35.0, "as_interior": 155.0},
         ad_set_overrides={"as_interior": dict(base_cvr=0.0140)},
@@ -183,6 +190,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "structural edit costs a learning-phase penalty for nothing."),
         correct_action_family=["none"],
         on_target_entities=[],
+        mechanism_level="none",
         objective=_objective(38.0, 480.0),
         ad_set_overrides=_flat_prospecting(),
         creative_overrides=_flat_creatives(),

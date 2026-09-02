@@ -49,7 +49,29 @@ reward correct diagnosis. The rules baseline loses because it chases noisy CPA o
 and re-scales retargeting into saturation -- a real failure mode, not a strawman.
 There is therefore genuine headroom between `rules` and `oracle` for the agent to occupy.
 
+## Post-mortem fixes applied (this turn)
+Implemented all 4 fixes from the S1_creative_fatigue seed-1 post-mortem: creative
+context in the default briefing, guardrail-enforced considered_alternative /
+pattern_check on every consequential action (all policies, not just LLM), prose
+salience of contradicted/partial outcomes in the prompt, and a general mechanism-
+level diagnosis metric (`evaluate.mechanism_diagnosis`) replacing the old
+entity-touch-only `diagnosis_hit`. Full details in DECISIONS.md D12.
+
+95 deterministic tests pass (`python3 -m unittest discover -s tests -q`), including
+a regression test that re-scores the actual saved S1 seed-1 LLM trace from the
+post-mortem and confirms the fixed metric now reports it as a miss.
+
+No LLM evaluation has been run since the fixes landed -- awaiting approval.
+
+## Known/documented limitation
+OraclePolicy never calls a read tool (it applies a pre-known fix), so
+`investigated_correct_level` is False for it on S1-S3 and its `diagnosis_hit` is
+therefore also False despite `acted_on_mechanism` always being True. This is
+correct behaviour for a metric that is honest about what "diagnosis" means, not a
+bug -- `acted_on_mechanism_rate` is the number to read for the oracle specifically.
+
 ## Next
-- `claude setup-token`, then `python3 -m adops run --policy llm --report`
-- iterate on the prompt from real traces; add `llm` to the evaluation matrix
-- optional: a second reporting pass once agent traces exist
+- Await approval, then run `python3 -m adops run --policy llm --report` on
+  S1_creative_fatigue seed 1 again and compare against this turn's fixes.
+- If the creative-level blind spot persists, the next lever is prompt emphasis
+  (fix #1 made the data available; it did not force the model to look).

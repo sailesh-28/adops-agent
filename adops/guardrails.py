@@ -14,6 +14,9 @@ from .schema import ACTIVE, PAUSED
 ACTION_TOOLS = {"set_budget", "set_status", "launch_creative_test"}
 EXPECTED_KEYS = ("entity_id", "metric", "direction", "magnitude_pct", "periods")
 ALLOWED_METRICS = {"cpa", "ctr", "cvr", "cpc", "cpm", "conversions", "spend", "roas", "frequency"}
+ALTERNATIVE_KEYS = ("level", "summary", "why_rejected")
+ALTERNATIVE_LEVELS = ("creative", "ad_set")
+PATTERN_CHECK_KEYS = ("similar_past_action", "reasoning")
 
 
 class Rejection(Exception):
@@ -56,6 +59,45 @@ def check_expected_effect(expected: dict) -> None:
                         "periods must be between 1 and 4")
 
 
+def check_considered_alternative(args: dict) -> None:
+    """Every consequential action must name the plausible action at the OTHER level
+    of the hierarchy and say why it was not chosen. This does not force a particular
+    level to win -- it forces the choice to be stated, so a budget cut on a whole ad
+    set can no longer stand in for a diagnosis that was never actually made at the
+    creative level (see PROJECT post-mortem, S1_creative_fatigue seed 1)."""
+    alt = args.get("considered_alternative")
+    if not isinstance(alt, dict):
+        raise Rejection("alternative_not_considered",
+                        "Consequential actions require a considered_alternative object "
+                        "naming the plausible action at the OTHER hierarchy level "
+                        "(creative vs ad_set) and why it was not chosen instead.")
+    missing = [k for k in ALTERNATIVE_KEYS if not str(alt.get(k, "")).strip()]
+    if missing:
+        raise Rejection("alternative_incomplete",
+                        "considered_alternative is missing: %s" % ", ".join(missing))
+    if alt["level"] not in ALTERNATIVE_LEVELS:
+        raise Rejection("alternative_invalid_level",
+                        "considered_alternative.level must be one of %s"
+                        % list(ALTERNATIVE_LEVELS))
+
+
+def check_pattern_check(args: dict) -> None:
+    """Every consequential action must explicitly say whether it resembles the shape
+    of a past action (same tool, same kind of entity, same direction) and, if so, why
+    acting again is still justified given that action's measured verdict. This does
+    not forbid repeating an action type -- it forbids repeating one silently."""
+    pat = args.get("pattern_check")
+    if not isinstance(pat, dict):
+        raise Rejection("pattern_check_missing",
+                        "Consequential actions require a pattern_check object stating "
+                        "whether this action resembles a past one and, if so, why it "
+                        "is still justified.")
+    missing = [k for k in PATTERN_CHECK_KEYS if not str(pat.get(k, "")).strip()]
+    if missing:
+        raise Rejection("pattern_check_incomplete",
+                        "pattern_check is missing: %s" % ", ".join(missing))
+
+
 def check_budgets(env) -> None:
     """Called before every run so that violations cannot be created out of band."""
     pass
@@ -90,6 +132,8 @@ def check(env, tool: str, args: dict) -> None:
         if not str(args.get("rationale", "")).strip():
             raise Rejection("rationale_required",
                             "Consequential actions require a non-empty rationale.")
+        check_considered_alternative(args)
+        check_pattern_check(args)
 
     if tool == "set_budget":
         aid = args.get("entity_id")

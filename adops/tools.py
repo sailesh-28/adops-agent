@@ -92,6 +92,25 @@ EXPECTED_EFFECT_SPEC = {
     "periods": "integer 1-4: within how many periods the effect should be visible",
 }
 
+CONSIDERED_ALTERNATIVE_SPEC = {
+    "level": "'creative' or 'ad_set' -- the OTHER hierarchy level from the one you "
+             "are about to act on",
+    "summary": "the specific alternative action at that level (e.g. 'pause the "
+               "weaker creative in this ad set' if you are about to cut the ad "
+               "set's budget)",
+    "why_rejected": "why the evidence favours your chosen action over this "
+                    "alternative; if no plausible alternative exists, say so and why",
+}
+
+PATTERN_CHECK_SPEC = {
+    "similar_past_action": "the seq number of a past action of the same shape (same "
+                           "tool, same kind of entity, same direction of change), or "
+                           "'none' if there is no such precedent",
+    "reasoning": "if there is a precedent, state its measured verdict and why this "
+                "situation is different, or why acting again is still justified; if "
+                "there is no precedent, say so",
+}
+
 
 def envelope(ok: bool, tool: str, data=None, error: Optional[str] = None,
              code: Optional[str] = None) -> dict:
@@ -244,18 +263,28 @@ def t_compare_segments(env, level: str = "ad_set", parent_id: Optional[str] = No
 
 # ------------------------------------------------------------ action tools
 def t_set_budget(env, entity_id: str = "", new_daily_budget: float = 0.0,
-                 rationale: str = "", expected_effect: Optional[dict] = None, **_) -> dict:
-    return env.apply_set_budget(entity_id, new_daily_budget, rationale, expected_effect or {})
+                 rationale: str = "", expected_effect: Optional[dict] = None,
+                 considered_alternative: Optional[dict] = None,
+                 pattern_check: Optional[dict] = None, **_) -> dict:
+    return env.apply_set_budget(entity_id, new_daily_budget, rationale,
+                                expected_effect or {}, considered_alternative or {},
+                                pattern_check or {})
 
 
 def t_set_status(env, entity_id: str = "", status: str = "", rationale: str = "",
-                 expected_effect: Optional[dict] = None, **_) -> dict:
-    return env.apply_set_status(entity_id, status, rationale, expected_effect or {})
+                 expected_effect: Optional[dict] = None,
+                 considered_alternative: Optional[dict] = None,
+                 pattern_check: Optional[dict] = None, **_) -> dict:
+    return env.apply_set_status(entity_id, status, rationale, expected_effect or {},
+                                considered_alternative or {}, pattern_check or {})
 
 
 def t_launch_creative_test(env, ad_set_id: str = "", rationale: str = "",
-                           expected_effect: Optional[dict] = None, **_) -> dict:
-    return env.apply_launch_creative_test(ad_set_id, rationale, expected_effect or {})
+                           expected_effect: Optional[dict] = None,
+                           considered_alternative: Optional[dict] = None,
+                           pattern_check: Optional[dict] = None, **_) -> dict:
+    return env.apply_launch_creative_test(ad_set_id, rationale, expected_effect or {},
+                                          considered_alternative or {}, pattern_check or {})
 
 
 def t_advance_period(env, note: str = "", **_) -> dict:

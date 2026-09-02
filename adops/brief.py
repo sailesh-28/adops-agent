@@ -98,6 +98,45 @@ def ad_set_table(env, lookback: int = 3) -> List[dict]:
     return out
 
 
+def creative_table(env, lookback: int = 3) -> List[dict]:
+    """One descriptive row per creative: current window, previous window, deltas.
+
+    Present in the default state so creative-level signal is not structurally
+    invisible next to the ad-set table -- the agent should not have to guess that a
+    tool call would reveal it. Contains no causal labels ("fatigue", etc.); the
+    agent still decides what it means and whether to investigate further with
+    compare_segments / get_timeseries.
+    """
+    cur_a, cur_b = _window(env, lookback)
+    prev_b = cur_a - 1
+    prev_a = max(1, prev_b - lookback + 1)
+    out = []
+    for crid, cr in env.account.creatives.items():
+        cur = env.entity_metrics(crid, cur_a, cur_b)
+        prev = env.entity_metrics(crid, prev_a, prev_b) if prev_b >= 1 else {}
+        row = {
+            "creative_id": crid,
+            "name": cr.name,
+            "ad_set_id": cr.ad_set_id,
+            "status": cr.status,
+            "is_test": cr.is_test,
+            "spend": round(cur["spend"], 2),
+            "clicks": int(cur["clicks"]),
+            "conversions": round(cur["conversions"], 1),
+            "cpa": round(cur["cpa"], 2) if cur["cpa"] else None,
+            "cpc": round(cur["cpc"], 2) if cur["cpc"] else None,
+            "ctr_pct": round(cur["ctr"] * 100, 3) if cur["ctr"] else None,
+            "cvr_pct": round(cur["cvr"] * 100, 3) if cur["cvr"] else None,
+            "data_sufficiency": S.sufficiency(cur["clicks"], cur["conversions"]),
+        }
+        for m in ("ctr", "cpc", "cpa"):
+            ch = M.pct_change(cur.get(m), prev.get(m)) if prev else None
+            row["%s_delta_pct" % m] = round(ch * 100, 1) if ch is not None else None
+        out.append(row)
+    out.sort(key=lambda r: (r["ad_set_id"], -(r["ctr_pct"] or 0)))
+    return out
+
+
 def account_summary(env, lookback: int = 3) -> dict:
     a, b = _window(env, lookback)
     cur = env.entity_metrics_all(a, b)
@@ -124,6 +163,8 @@ def ledger_view(env) -> List[dict]:
     return [{
         "seq": e.seq, "period": e.period, "tool": e.tool, "args": e.args,
         "rationale": e.rationale, "expected": e.expected,
+        "considered_alternative": e.considered_alternative,
+        "pattern_check": e.pattern_check,
         "verdict": e.verdict, "detail": e.detail,
     } for e in env.ledger]
 
@@ -143,6 +184,7 @@ def build(env, lookback: int = 3) -> dict:
         "budgets": budget_status(env),
         "account": account_summary(env, lookback),
         "ad_sets": ad_set_table(env, lookback),
+        "creatives": creative_table(env, lookback),
         "action_ledger": ledger_view(env),
         "reporting_note": ("Conversions are reported with a delay: roughly a quarter of a "
                            "period's conversions appear in the following period's figures."),

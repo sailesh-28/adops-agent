@@ -32,6 +32,11 @@ class LedgerEntry:
     realised: Optional[dict] = None
     verdict: str = "pending"
     detail: str = ""
+    # Deliberation the policy was required to state before acting (see guardrails.py
+    # check_considered_alternative / check_pattern_check). Populated for every policy,
+    # not only the LLM, so the comparison across policies stays apples-to-apples.
+    considered_alternative: dict = field(default_factory=dict)
+    pattern_check: dict = field(default_factory=dict)
 
     def summary(self) -> str:
         exp = self.expected or {}
@@ -55,6 +60,11 @@ class AdAccountEnv:
         self.rng = Random(zlib.crc32(scenario.key.encode("utf-8")) * 1000 + seed)
         self.account: Account = SC.build_account(scenario)
         self.starting_daily_budget = self.account.account_daily_budget()
+        # Captured once, before any action can mutate it. Evaluation-only: used by
+        # evaluate.py to tell a budget cut from a raise when scoring which
+        # correct_action_family entry (if any) a policy's actions actually satisfy.
+        self._baseline_daily_budgets = {aid: a.daily_budget
+                                        for aid, a in self.account.ad_sets.items()}
         if self.limits.max_account_daily_budget is None:
             self.limits = replace(self.limits,
                                   max_account_daily_budget=round(self.starting_daily_budget * 1.15, 2))
@@ -181,19 +191,24 @@ class AdAccountEnv:
         return self._seq
 
     def _register(self, tool: str, args: dict, rationale: str, expected: dict,
-                  entity_id: str) -> LedgerEntry:
+                  entity_id: str, considered_alternative: Optional[dict] = None,
+                  pattern_check: Optional[dict] = None) -> LedgerEntry:
         baseline = self._effect_baseline(expected.get("entity_id") or entity_id,
                                          expected.get("metric", "cpa"))
         entry = LedgerEntry(seq=self._next_seq(), period=self.live_period, tool=tool,
                             args=args, rationale=rationale, expected=expected,
-                            baseline=baseline)
+                            baseline=baseline,
+                            considered_alternative=considered_alternative or {},
+                            pattern_check=pattern_check or {})
         self.ledger.append(entry)
         self.changes_total += 1
         self.changes_this_period += 1
         return entry
 
     def apply_set_budget(self, ad_set_id: str, new_daily_budget: float,
-                         rationale: str, expected: dict) -> dict:
+                         rationale: str, expected: dict,
+                         considered_alternative: Optional[dict] = None,
+                         pattern_check: Optional[dict] = None) -> dict:
         ad_set = self.account.ad_sets[ad_set_id]
         old = ad_set.daily_budget
         ad_set.daily_budget = round(float(new_daily_budget), 2)
@@ -204,7 +219,9 @@ class AdAccountEnv:
                                       self.limits.learning_efficiency)
         self._register("set_budget",
                        {"entity_id": ad_set_id, "new_daily_budget": ad_set.daily_budget},
-                       rationale, expected, ad_set_id)
+                       rationale, expected, ad_set_id,
+                       considered_alternative=considered_alternative,
+                       pattern_check=pattern_check)
         return {"ok": True, "entity_id": ad_set_id, "old_daily_budget": old,
                 "new_daily_budget": ad_set.daily_budget,
                 "relative_change": round(rel, 4),
@@ -212,7 +229,8 @@ class AdAccountEnv:
                 "account_daily_budget": round(self.account.account_daily_budget(), 2)}
 
     def apply_set_status(self, entity_id: str, status: str, rationale: str,
-                         expected: dict) -> dict:
+                         expected: dict, considered_alternative: Optional[dict] = None,
+                         pattern_check: Optional[dict] = None) -> dict:
         kind = self.account.entity_type(entity_id)
         if kind == "ad_set":
             self.account.ad_sets[entity_id].status = status
@@ -223,12 +241,16 @@ class AdAccountEnv:
         self.world.start_learning(affected, self.limits.learning_penalty_periods,
                                   self.limits.learning_efficiency)
         self._register("set_status", {"entity_id": entity_id, "status": status},
-                       rationale, expected, entity_id)
+                       rationale, expected, entity_id,
+                       considered_alternative=considered_alternative,
+                       pattern_check=pattern_check)
         return {"ok": True, "entity_id": entity_id, "entity_type": kind, "status": status,
                 "learning_phase_triggered": True, "affected_ad_set": affected}
 
     def apply_launch_creative_test(self, ad_set_id: str, rationale: str,
-                                   expected: dict) -> dict:
+                                   expected: dict,
+                                   considered_alternative: Optional[dict] = None,
+                                   pattern_check: Optional[dict] = None) -> dict:
         self.creative_test_count += 1
         cid = "cr_test_%s_%d" % (ad_set_id.replace("as_", ""), self.creative_test_count)
         name = "Test Creative %d (%s)" % (self.creative_test_count,
@@ -240,7 +262,9 @@ class AdAccountEnv:
         self.world.start_learning(ad_set_id, self.limits.learning_penalty_periods,
                                   self.limits.learning_efficiency)
         self._register("launch_creative_test", {"ad_set_id": ad_set_id},
-                       rationale, expected, ad_set_id)
+                       rationale, expected, ad_set_id,
+                       considered_alternative=considered_alternative,
+                       pattern_check=pattern_check)
         return {"ok": True, "ad_set_id": ad_set_id, "new_creative_id": cid,
                 "new_creative_name": name, "learning_phase_triggered": True,
                 "note": "New creative quality is unknown until it accumulates data."}

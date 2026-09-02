@@ -44,3 +44,36 @@ D10 Runtime LLM = `claude -p` headless on Pro subscription.
 D11 Four scenarios incl. a NO-REAL-PROBLEM noise trap.
     Why: the discriminating test of a good agent is restraint. Every scenario's correct
     action is another scenario's wrong action.
+
+D12 Post-mortem fixes (S1_creative_fatigue seed 1, see prior turn's diagnosis):
+    (a) Creative-level context is now ALWAYS in the default briefing (brief.py
+        creative_table), not only reachable via a tool call -- fixes the structural
+        over-weighting of ad-set-level state that caused the agent to never once
+        call get_account_snapshot or compare_segments(level="creative") on the
+        defective ad set.
+    (b) Every consequential action requires a `considered_alternative` object
+        (the plausible action at the OTHER hierarchy level, and why it lost) and a
+        `pattern_check` object (whether this resembles a past action and, if so, why
+        acting again is justified given its measured verdict). Both are guardrail-
+        enforced -- missing or empty is a deterministic rejection fed back as an
+        observation -- exactly like expected_effect. Neither forces a particular
+        level or forbids a repeat; they force the deliberation to be stated.
+        Applies uniformly to every policy (rules/oracle/llm), not just the LLM, to
+        preserve D6 (one runtime, one tool layer, apples-to-apples comparison).
+    (c) The user prompt now carries a prose "PRIOR ACTIONS AND THEIR MEASURED
+        OUTCOMES" section ahead of the raw JSON state (which is alphabetized by
+        `sort_keys=True` and would otherwise bury this), naming CONTRADICTED/PARTIAL
+        entries explicitly.
+    (d) `evaluate.py`'s diagnosis_hit was fixed: it used to count any action that
+        touched an entity in `on_target_entities`, so a plain ad-set budget cut on
+        as_broad counted as "diagnosing" S1's creative-fatigue defect. The new
+        `mechanism_diagnosis()` requires BOTH investigation at the scenario's
+        authored `mechanism_level` (creative/ad_set/none) AND an action matching the
+        correct tool KIND and DIRECTION from `correct_action_family` (parsed via a
+        small DSL: pause_creative / creative_test / cut_budget / raise_budget /
+        shift_budget / none). Re-scoring the actual saved S1 seed-1 trace offline
+        (no new LLM call) confirms it now correctly reports a miss.
+    Known limitation: OraclePolicy scores investigated_correct_level=False on
+    S1-S3 by construction (it applies a pre-known fix without investigating), so
+    its diagnosis_hit is also False even though acted_on_mechanism is always True.
+    This is intentional and documented, not a bug -- see PROJECT_STATE.md.

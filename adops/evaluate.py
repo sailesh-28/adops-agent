@@ -1,24 +1,151 @@
 """Reproducible evaluation across seeded scenarios.
 
 Every number here is computed in code. Scenario labels (`on_target_entities`,
-`correct_action_family`) are used ONLY for scoring and are never visible to a policy.
+`correct_action_family`, `mechanism_level`) are used ONLY for scoring and are never
+visible to a policy.
 """
 from __future__ import annotations
 
 import json
 import os
 import statistics as stats
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from . import policies as P
 from . import runtime, scenarios as SC
 from .env import AdAccountEnv
 
 ACTION_TOOLS = ("set_budget", "set_status", "launch_creative_test")
+READ_TOOLS = ("get_account_snapshot", "get_timeseries", "compare_segments")
 
 
 def _entity_of(step) -> Optional[str]:
     return step.args.get("entity_id") or step.args.get("ad_set_id")
+
+
+def _parse_spec(spec: str) -> dict:
+    """Parse one `correct_action_family` DSL entry, e.g. "cut_budget:as_cart" or
+    "shift_budget:as_interior->as_lal", into a structured match rule."""
+    if spec == "none":
+        return {"kind": "none"}
+    kind, _, rest = spec.partition(":")
+    if "->" in rest:
+        src, dst = rest.split("->", 1)
+        return {"kind": kind, "from": src, "to": dst}
+    return {"kind": kind, "entity": rest}
+
+
+def _budget_action_matches(step, entity: str, want_cut: bool, baseline: Dict[str, float]) -> bool:
+    if step.tool != "set_budget" or step.args.get("entity_id") != entity:
+        return False
+    base = baseline.get(entity)
+    new = step.args.get("new_daily_budget")
+    if base is None or new is None:
+        return False
+    return (float(new) < base) if want_cut else (float(new) > base)
+
+
+def _spec_satisfied(actions: List, spec: dict, baseline: Dict[str, float]) -> bool:
+    """Whether the agent's actual action sequence semantically matches one entry of
+    `correct_action_family` -- same tool KIND and same direction, not merely 'touched
+    the same entity with something'. This is what fixes the old diagnosis_hit metric:
+    a plain budget cut on as_broad no longer satisfies "pause_creative:cr_broad_a"."""
+    kind = spec["kind"]
+    if kind == "none":
+        return len(actions) == 0
+    if kind == "pause_creative":
+        return any(a.tool == "set_status" and a.args.get("entity_id") == spec["entity"]
+                   and a.args.get("status") == "paused" for a in actions)
+    if kind == "creative_test":
+        return any(a.tool == "launch_creative_test"
+                   and a.args.get("ad_set_id") == spec["entity"] for a in actions)
+    if kind == "cut_budget":
+        return any(_budget_action_matches(a, spec["entity"], True, baseline) for a in actions)
+    if kind == "raise_budget":
+        return any(_budget_action_matches(a, spec["entity"], False, baseline) for a in actions)
+    if kind == "shift_budget":
+        cut = any(_budget_action_matches(a, spec["from"], True, baseline) for a in actions)
+        raised = any(_budget_action_matches(a, spec["to"], False, baseline) for a in actions)
+        return cut and raised
+    return False
+
+
+def _spec_entities(spec: dict) -> Set[str]:
+    if spec["kind"] == "none":
+        return set()
+    if spec["kind"] == "shift_budget":
+        return {spec["from"], spec["to"]}
+    return {spec["entity"]}
+
+
+def _investigated_at_level(log, level: str, entities: Set[str], account) -> bool:
+    """Whether the agent took ANY read action that could have surfaced the mechanism
+    at the correct hierarchy level, for one of the relevant entities. Deliberately
+    structural (which tool, which level/parent argument) rather than text-matching
+    the model's hypotheses -- keeps the metric deterministic and provider-agnostic.
+    Once creative-level data is ambient in the default briefing (see brief.py
+    creative_table), this signal is weaker evidence of genuine investigation than it
+    used to be; `acted_on_mechanism` (below) is the metric's primary determinant."""
+    if level == "none":
+        return True
+    parents = set()
+    for eid in entities:
+        t = account.entity_type(eid)
+        if t == "creative" and eid in account.creatives:
+            parents.add(account.creatives[eid].ad_set_id)
+        elif t == "ad_set" and eid in account.ad_sets:
+            parents.add(account.ad_sets[eid].campaign_id)
+    for s in log.steps:
+        if not s.ok:
+            continue
+        eid = s.args.get("entity_id") if s.tool == "get_timeseries" else None
+        if eid is not None and eid in entities and account.entity_type(eid) == level:
+            return True
+        if s.tool == "get_account_snapshot" and level == "creative":
+            return True  # the snapshot always lists every creative's CTR/CPA
+        if s.tool == "compare_segments" and s.args.get("level") == level:
+            parent = s.args.get("parent_id")
+            if level == "creative" and parent in parents:
+                return True
+            if level == "ad_set" and (parent is None or parent in parents):
+                return True
+    return False
+
+
+def mechanism_diagnosis(scenario, env, log) -> dict:
+    """Did the policy correctly identify -- and act on -- the actual mechanism, as
+    opposed to touching a correct-looking entity with the wrong kind of action, or by
+    accident? General across scenarios: driven entirely by `mechanism_level` and
+    `correct_action_family`, both scenario-authored and never shown to any policy.
+
+    This directly replaces the old `diagnosis_hit`, which only checked whether a
+    touched entity id intersected `on_target_entities` -- so a plain budget cut on
+    as_broad counted as "diagnosing" S1_creative_fatigue even though the true defect
+    is a specific worn-out creative and the correct actions are pausing it or testing
+    a replacement. That is no longer sufficient here: `acted_on_mechanism` requires
+    the SAME tool kind and direction as one of the scenario's authored correct
+    actions, not just a touch on a related entity.
+    """
+    actions = [s for s in log.steps if s.tool in ACTION_TOOLS and s.ok]
+    specs = [_parse_spec(f) for f in scenario.correct_action_family]
+    entities: Set[str] = set()
+    for spec in specs:
+        entities |= _spec_entities(spec)
+
+    acted = any(_spec_satisfied(actions, spec, env._baseline_daily_budgets)
+               for spec in specs)
+    investigated = _investigated_at_level(log, scenario.mechanism_level, entities,
+                                          env.account)
+    return {
+        "mechanism_level": scenario.mechanism_level,
+        "mechanism_entities": sorted(entities),
+        "investigated_correct_level": investigated,
+        "acted_on_mechanism": acted,
+        # both signals required: awareness without action is not a diagnosis that
+        # helped, and action without any correct-level investigation risks having
+        # gotten there by luck -- see the S1 seed-1 post-mortem for exactly this case.
+        "diagnosis_hit": investigated and acted,
+    }
 
 
 def run_one(scenario_key: str, seed: int, policy_name: str, backend=None,
@@ -36,6 +163,7 @@ def run_one(scenario_key: str, seed: int, policy_name: str, backend=None,
     on_target = set(scenario.on_target_entities)
     actions = [s for s in log.steps if s.tool in ACTION_TOOLS and s.ok]
     touched = {_entity_of(s) for s in actions}
+    mech = mechanism_diagnosis(scenario, env, log)
     verdicts = {}
     for e in log.ledger:
         verdicts[e["verdict"]] = verdicts.get(e["verdict"], 0) + 1
@@ -44,12 +172,13 @@ def run_one(scenario_key: str, seed: int, policy_name: str, backend=None,
     metrics = dict(log.score)
     metrics.update({
         "policy": policy_name,
-        "reads": sum(1 for s in log.steps if s.tool in ("get_account_snapshot",
-                                                        "get_timeseries",
-                                                        "compare_segments")),
+        "reads": sum(1 for s in log.steps if s.tool in READ_TOOLS),
         "actions": len(actions),
-        "diagnosis_hit": bool(on_target and (touched & on_target)),
-        "off_target_actions": sum(1 for s in actions if _entity_of(s) not in on_target),
+        "diagnosis_hit": mech["diagnosis_hit"],
+        "investigated_correct_level": mech["investigated_correct_level"],
+        "acted_on_mechanism": mech["acted_on_mechanism"],
+        "off_target_actions": sum(1 for s in actions
+                                  if _entity_of(s) not in on_target),
         "unnecessary_actions": len(actions) if not on_target else 0,
         "effects_confirmed": verdicts.get("confirmed", 0),
         "effects_partial": verdicts.get("partial", 0),
@@ -85,6 +214,12 @@ def aggregate(rows: List[dict]) -> dict:
         "rejections": _mean([r["rejections"] for r in rows]),
         "diagnosis_hit_rate": round(sum(1 for r in rows if r["diagnosis_hit"])
                                     / len(rows), 2) if rows else None,
+        "investigated_correct_level_rate": (
+            round(sum(1 for r in rows if r["investigated_correct_level"]) / len(rows), 2)
+            if rows else None),
+        "acted_on_mechanism_rate": (
+            round(sum(1 for r in rows if r["acted_on_mechanism"]) / len(rows), 2)
+            if rows else None),
         "unnecessary_actions": _mean([r["unnecessary_actions"] for r in rows]),
         "off_target_actions": _mean([r["off_target_actions"] for r in rows]),
         "prediction_accuracy": _mean([r["prediction_accuracy"] for r in rows]),

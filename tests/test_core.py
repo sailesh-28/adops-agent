@@ -148,6 +148,9 @@ class TestGuardrails(unittest.TestCase):
         self.e = make()
         self.eff = {"entity_id": "as_lal", "metric": "cpa", "direction": "decrease",
                     "magnitude_pct": 10, "periods": 2}
+        self.alt = {"level": "creative", "summary": "pause the weaker creative instead",
+                   "why_rejected": "not enough per-creative signal yet"}
+        self.pat = {"similar_past_action": "none", "reasoning": "first action of this shape"}
 
     def rej(self, tool, args):
         r = tools.dispatch(self.e, tool, args)
@@ -157,30 +160,95 @@ class TestGuardrails(unittest.TestCase):
     def test_budget_step_cap(self):
         self.assertEqual(self.rej("set_budget", {
             "entity_id": "as_lal", "new_daily_budget": 400, "rationale": "x",
-            "expected_effect": self.eff}), "budget_step_too_large")
+            "expected_effect": self.eff, "considered_alternative": self.alt,
+            "pattern_check": self.pat}), "budget_step_too_large")
 
     def test_expected_effect_required(self):
         self.assertEqual(self.rej("set_budget", {
-            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x"}),
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "considered_alternative": self.alt, "pattern_check": self.pat}),
             "expected_effect_missing")
 
     def test_rationale_required(self):
         self.assertEqual(self.rej("set_budget", {
             "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "  ",
-            "expected_effect": self.eff}), "rationale_required")
+            "expected_effect": self.eff, "considered_alternative": self.alt,
+            "pattern_check": self.pat}), "rationale_required")
+
+    def test_considered_alternative_required(self):
+        self.assertEqual(self.rej("set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": self.eff, "pattern_check": self.pat}),
+            "alternative_not_considered")
+
+    def test_considered_alternative_incomplete(self):
+        self.assertEqual(self.rej("set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": self.eff,
+            "considered_alternative": {"level": "creative", "summary": "", "why_rejected": "x"},
+            "pattern_check": self.pat}), "alternative_incomplete")
+
+    def test_considered_alternative_invalid_level(self):
+        self.assertEqual(self.rej("set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": self.eff,
+            "considered_alternative": {"level": "campaign", "summary": "x", "why_rejected": "x"},
+            "pattern_check": self.pat}), "alternative_invalid_level")
+
+    def test_pattern_check_required(self):
+        self.assertEqual(self.rej("set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": self.eff, "considered_alternative": self.alt}),
+            "pattern_check_missing")
+
+    def test_pattern_check_incomplete(self):
+        self.assertEqual(self.rej("set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": self.eff, "considered_alternative": self.alt,
+            "pattern_check": {"similar_past_action": "none", "reasoning": "  "}}),
+            "pattern_check_incomplete")
+
+    def test_full_deliberation_succeeds(self):
+        r = tools.dispatch(self.e, "set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": self.eff, "considered_alternative": self.alt,
+            "pattern_check": self.pat})
+        self.assertTrue(r["ok"], r)
+        entry = self.e.ledger[-1]
+        self.assertEqual(entry.considered_alternative, self.alt)
+        self.assertEqual(entry.pattern_check, self.pat)
+
+    def test_pattern_check_does_not_forbid_a_repeat_it_only_requires_it_be_stated(self):
+        """Repeating an action type must not be hard-blocked by guardrails -- only
+        the deliberation about it is required. The LLM/policy decides."""
+        e = self.e
+        for i in range(2):
+            r = tools.dispatch(e, "set_budget", {
+                "entity_id": "as_lal", "new_daily_budget":
+                    round(e.account.ad_sets["as_lal"].daily_budget * 0.95, 2),
+                "rationale": "x", "expected_effect": self.eff,
+                "considered_alternative": self.alt,
+                "pattern_check": {"similar_past_action": "none" if i == 0 else "#1",
+                                  "reasoning": "repeating on fresh data, same as before"}})
+            self.assertTrue(r["ok"], r)
 
     def test_unknown_entity(self):
         self.assertEqual(self.rej("set_budget", {
             "entity_id": "as_nope", "new_daily_budget": 100, "rationale": "x",
-            "expected_effect": self.eff}), "invalid_entity")
+            "expected_effect": self.eff, "considered_alternative": self.alt,
+            "pattern_check": self.pat}), "invalid_entity")
 
     def test_cannot_pause_last_creative(self):
         e = self.e
         eff = dict(self.eff, entity_id="cr_lal_a")
         tools.dispatch(e, "set_status", {"entity_id": "cr_lal_a", "status": PAUSED,
-                                         "rationale": "x", "expected_effect": eff})
+                                         "rationale": "x", "expected_effect": eff,
+                                         "considered_alternative": self.alt,
+                                         "pattern_check": self.pat})
         r = tools.dispatch(e, "set_status", {"entity_id": "cr_lal_b", "status": PAUSED,
-                                             "rationale": "x", "expected_effect": eff})
+                                             "rationale": "x", "expected_effect": eff,
+                                             "considered_alternative": self.alt,
+                                             "pattern_check": self.pat})
         self.assertEqual(r["error_code"], "last_active_creative")
 
     def test_pause_requires_data(self):
@@ -189,7 +257,9 @@ class TestGuardrails(unittest.TestCase):
         cid = e.account.ad_sets["as_lal"].creative_ids[-1]
         r = tools.dispatch(e, "set_status", {"entity_id": cid, "status": PAUSED,
                                              "rationale": "x",
-                                             "expected_effect": dict(self.eff, entity_id=cid)})
+                                             "expected_effect": dict(self.eff, entity_id=cid),
+                                             "considered_alternative": self.alt,
+                                             "pattern_check": self.pat})
         self.assertEqual(r["error_code"], "insufficient_data_for_pause")
 
     def test_change_budget_per_period(self):
@@ -198,12 +268,14 @@ class TestGuardrails(unittest.TestCase):
             r = tools.dispatch(e, "set_budget", {
                 "entity_id": "as_lal", "new_daily_budget":
                     round(e.account.ad_sets["as_lal"].daily_budget * 0.9, 2),
-                "rationale": "x", "expected_effect": self.eff})
+                "rationale": "x", "expected_effect": self.eff,
+                "considered_alternative": self.alt, "pattern_check": self.pat})
             self.assertTrue(r["ok"], r)
         r = tools.dispatch(e, "set_budget", {
             "entity_id": "as_lal", "new_daily_budget":
                 round(e.account.ad_sets["as_lal"].daily_budget * 0.95, 2),
-            "rationale": "x", "expected_effect": self.eff})
+            "rationale": "x", "expected_effect": self.eff,
+            "considered_alternative": self.alt, "pattern_check": self.pat})
         self.assertEqual(r["error_code"], "period_change_budget_exhausted")
 
     def test_pacing_guard_blocks_unfunded_increase(self):
@@ -212,7 +284,8 @@ class TestGuardrails(unittest.TestCase):
         r = tools.dispatch(e, "set_budget", {
             "entity_id": "as_broad", "new_daily_budget":
                 round(e.account.ad_sets["as_broad"].daily_budget * 1.2, 2),
-            "rationale": "x", "expected_effect": dict(self.eff, entity_id="as_broad")})
+            "rationale": "x", "expected_effect": dict(self.eff, entity_id="as_broad"),
+            "considered_alternative": self.alt, "pattern_check": self.pat})
         self.assertEqual(r["error_code"], "pacing_guard")
 
     def test_total_change_budget(self):
@@ -222,7 +295,8 @@ class TestGuardrails(unittest.TestCase):
             r = tools.dispatch(e, "set_budget", {
                 "entity_id": "as_lal", "new_daily_budget":
                     round(e.account.ad_sets["as_lal"].daily_budget * 0.95, 2),
-                "rationale": "x", "expected_effect": self.eff})
+                "rationale": "x", "expected_effect": self.eff,
+                "considered_alternative": self.alt, "pattern_check": self.pat})
             if r["ok"]:
                 made += 1
             else:
@@ -234,7 +308,8 @@ class TestGuardrails(unittest.TestCase):
         r = tools.dispatch(e, "set_budget", {
             "entity_id": "as_lal", "new_daily_budget":
                 round(e.account.ad_sets["as_lal"].daily_budget * 0.95, 2),
-            "rationale": "x", "expected_effect": self.eff})
+            "rationale": "x", "expected_effect": self.eff,
+            "considered_alternative": self.alt, "pattern_check": self.pat})
         self.assertEqual(r["error_code"], "change_budget_exhausted")
 
 
@@ -308,6 +383,67 @@ class TestScenarioSignatures(unittest.TestCase):
         cvrs = {a: e.world.ad_sets[a].base_cvr
                 for a in ("as_broad", "as_lal", "as_interior", "as_seas_broad")}
         self.assertEqual(len(set(cvrs.values())), 1)
+
+
+class TestCreativeContext(unittest.TestCase):
+    """Post-mortem fix #1: creative-level data must be visible in the DEFAULT state,
+    not only discoverable via a tool call."""
+
+    def test_brief_build_includes_a_creatives_table_by_default(self):
+        e = make("S1_creative_fatigue", 3)
+        b = brief.build(e)
+        self.assertIn("creatives", b)
+        ids = {r["creative_id"] for r in b["creatives"]}
+        self.assertEqual(ids, set(e.account.creatives))
+
+    def test_creative_rows_carry_metrics_not_causal_labels(self):
+        e = make("S1_creative_fatigue", 3)
+        row = brief.creative_table(e)[0]
+        for key in ("ctr_pct", "cvr_pct", "cpa", "cpc", "data_sufficiency",
+                   "ctr_delta_pct", "cpc_delta_pct", "ad_set_id", "status"):
+            self.assertIn(key, row)
+        blob = json.dumps(brief.creative_table(e))
+        for word in ("fatigue", "fatigued", "decay", "worn", "saturat"):
+            self.assertNotIn(word, blob.lower(), "briefing must stay descriptive-only")
+
+    def test_creative_table_reflects_the_known_fatigue_signal_without_a_tool_call(self):
+        """The exact signal the S1 seed-1 agent missed (cr_broad_a's CTR gap) must be
+        readable directly off the default briefing, with no compare_segments call."""
+        wins = 0
+        for seed in range(1, 9):
+            e = make("S1_creative_fatigue", seed)
+            rows = {r["creative_id"]: r for r in brief.creative_table(e)}
+            wins += rows["cr_broad_a"]["ctr_pct"] < rows["cr_broad_b"]["ctr_pct"]
+        self.assertGreaterEqual(wins, 7)
+
+    def test_creatives_grouped_by_ad_set_not_flattened(self):
+        e = make("S1_creative_fatigue", 3)
+        by_ad_set = {}
+        for r in brief.creative_table(e):
+            by_ad_set.setdefault(r["ad_set_id"], []).append(r["creative_id"])
+        for ad_set in e.account.ad_sets.values():
+            self.assertEqual(sorted(by_ad_set.get(ad_set.id, [])),
+                             sorted(ad_set.creative_ids))
+
+
+class TestDeliberationLedgerSalience(unittest.TestCase):
+    """Post-mortem fixes #2/#3: the ledger the agent is shown must carry the
+    deliberation it was required to state, so past reasoning -- not just past
+    outcomes -- is visible for future decisions."""
+
+    def test_ledger_view_carries_considered_alternative_and_pattern_check(self):
+        e = make()
+        alt = {"level": "creative", "summary": "s", "why_rejected": "r"}
+        pat = {"similar_past_action": "none", "reasoning": "first time"}
+        r = tools.dispatch(e, "set_budget", {
+            "entity_id": "as_lal", "new_daily_budget": 100, "rationale": "x",
+            "expected_effect": {"entity_id": "as_lal", "metric": "cpa",
+                                "direction": "decrease", "magnitude_pct": 10, "periods": 2},
+            "considered_alternative": alt, "pattern_check": pat})
+        self.assertTrue(r["ok"], r)
+        entry = brief.ledger_view(e)[0]
+        self.assertEqual(entry["considered_alternative"], alt)
+        self.assertEqual(entry["pattern_check"], pat)
 
 
 if __name__ == "__main__":

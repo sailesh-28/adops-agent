@@ -10,7 +10,8 @@ from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 from .llm import LLMBackend, LLMError
-from .tools import EXPECTED_EFFECT_SPEC, TOOL_SCHEMAS
+from .tools import (CONSIDERED_ALTERNATIVE_SPEC, EXPECTED_EFFECT_SPEC,
+                    PATTERN_CHECK_SPEC, TOOL_SCHEMAS)
 
 MAX_RESULT_CHARS = 2600
 RECENT_RESULTS = 4
@@ -45,6 +46,14 @@ the period without acting.
 - Hard guardrails validate every action before it executes. If an action is rejected you \
 will see the reason; adapt rather than repeating it.
 
+STATE YOU ARE GIVEN
+The account has two levels below campaign: ad sets and, inside each ad set, creatives. \
+Every state you receive includes BOTH an ad-set-level table and a creative-level table by \
+default -- you never have to call a tool just to see basic creative CTR/CPA. A real \
+problem can live at either level, or at neither. Nothing here tells you which; that is \
+still your call, and `compare_segments` / `get_timeseries` remain how you get statistical \
+tests and history at whichever level you choose to dig into.
+
 WHAT YOU MUST NOT DO
 - Do not compute metrics yourself. The tools return computed metrics, confidence \
 intervals and statistical verdicts. Use them.
@@ -55,8 +64,28 @@ a difference is distinguishable from noise; "insufficient_data" means you do not
 TOOLS
 %s
 
-EXPECTED-EFFECT OBJECT (required on set_budget, set_status and launch_creative_test)
+BEFORE A CONSEQUENTIAL ACTION (set_budget, set_status, launch_creative_test)
+Three objects are required inside `args`, in addition to the tool's own arguments:
+
+expected_effect (required)
 %s
+
+considered_alternative (required) -- the plausible action at the OTHER hierarchy level
+%s
+This does not mean the alternative has to lose in general -- state it honestly and say \
+why the evidence favours your chosen level THIS time. If you truly see no plausible \
+alternative at the other level, say that and say why.
+
+pattern_check (required) -- whether this resembles a past action of yours
+%s
+The state you are given always lists your own past actions and their MEASURED verdicts \
+(confirmed / partial / contradicted / unmeasurable), including any considered_alternative \
+and pattern_check you stated for them at the time. Before proposing a new action, check \
+whether it has the same shape (same tool, same kind of entity, same direction of change) \
+as a past action whose verdict was "contradicted" or "partial". This does not forbid \
+repeating an action type -- it forbids repeating one without acknowledging what happened \
+last time and saying explicitly why this case is different, or why acting again is still \
+justified anyway.
 
 OUTPUT CONTRACT
 Reply with exactly one JSON object and nothing else. No prose before or after, no code \
@@ -69,12 +98,15 @@ fences. Schema:
   ],
   "decision": "investigate" | "act" | "wait" | "stop",
   "tool": "<one tool name>",
-  "args": { ... arguments for that tool ... }
+  "args": { ... arguments for that tool, including the three objects above when the \
+tool is set_budget, set_status or launch_creative_test ... }
 }
 Rank hypotheses most likely first. If you are acting, the chosen action must follow from \
 the top hypothesis and the evidence you have actually gathered.""" % (
     _tool_docs(),
     "\n".join("      - %s: %s" % (k, v) for k, v in EXPECTED_EFFECT_SPEC.items()),
+    "\n".join("      - %s: %s" % (k, v) for k, v in CONSIDERED_ALTERNATIVE_SPEC.items()),
+    "\n".join("      - %s: %s" % (k, v) for k, v in PATTERN_CHECK_SPEC.items()),
 )
 
 
@@ -150,12 +182,54 @@ def _truncate(payload, limit: int = MAX_RESULT_CHARS) -> str:
     return text[:limit] + ' ... [truncated: call the tool with a narrower scope]"'
 
 
+def _fmt_ledger_entry(e: dict) -> str:
+    exp = e.get("expected") or {}
+    verdict = e.get("verdict", "pending")
+    tag = "PENDING" if verdict == "pending" else verdict.upper()
+    core = {k: v for k, v in (e.get("args") or {}).items()
+           if k in ("entity_id", "new_daily_budget", "status", "ad_set_id")}
+    line = "  #%d p%d %s(%s) -> %s" % (e["seq"], e["period"], e["tool"],
+                                       json.dumps(core, sort_keys=True), tag)
+    if e.get("detail"):
+        line += ": %s" % e["detail"]
+    alt = e.get("considered_alternative") or {}
+    pat = e.get("pattern_check") or {}
+    if alt:
+        line += "\n      (at the time, alternative considered: %s -- %s)" % (
+            alt.get("level"), alt.get("why_rejected", "")[:160])
+    if pat and str(pat.get("similar_past_action", "none")) != "none":
+        line += "\n      (at the time, flagged as similar to #%s: %s)" % (
+            pat.get("similar_past_action"), pat.get("reasoning", "")[:160])
+    return line
+
+
+def summarize_ledger(ledger: List[dict]) -> str:
+    """Prose recap of prior actions and their measured outcomes, placed ahead of the
+    raw JSON state so it cannot be missed. Deliberately surfaces CONTRADICTED and
+    PARTIAL verdicts first -- those are the ones a repeat action must reckon with."""
+    if not ledger:
+        return ""
+    bad = [e for e in ledger if e["verdict"] in ("contradicted", "partial")]
+    lines = ["\nYOUR PRIOR ACTIONS AND THEIR MEASURED OUTCOMES (most recent last):"]
+    for e in ledger:
+        lines.append(_fmt_ledger_entry(e))
+    if bad:
+        lines.append("\n%d of your past action(s) above did NOT confirm as expected. "
+                     "If your next action has the same tool, same kind of entity, and "
+                     "same direction of change as one of these, your pattern_check must "
+                     "name it and explain why acting again is still justified." % len(bad))
+    return "\n".join(lines)
+
+
 def build_user_prompt(briefing: dict, recent: List[dict], rejections: List[dict],
                       note: str = "") -> str:
     parts = [
         "CURRENT STATE (all figures computed deterministically by the platform):",
         json.dumps(briefing, sort_keys=True, indent=1),
     ]
+    ledger_summary = summarize_ledger(briefing.get("action_ledger") or [])
+    if ledger_summary:
+        parts.append(ledger_summary)
     if recent:
         parts.append("\nRESULTS OF YOUR LAST %d TOOL CALLS (most recent last):" % len(recent))
         for r in recent:

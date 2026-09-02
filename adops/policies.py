@@ -67,6 +67,17 @@ class RulePolicy:
         last = self.last_changed.get(entity_id)
         return last is None or (period - last) >= self.COOLDOWN_PERIODS
 
+    def _pattern_check(self, entity_id: str, prev_period) -> dict:
+        """Honest, deterministic self-report of whether this entity was touched
+        before, using the cooldown bookkeeping the rule already maintains."""
+        if prev_period is None:
+            return {"similar_past_action": "none",
+                    "reasoning": "no prior change recorded for %s" % entity_id}
+        return {"similar_past_action": "period %d" % prev_period,
+                "reasoning": ("%s was last changed at period %d; the %d-period cooldown "
+                              "has elapsed so a repeat is being considered on fresh data"
+                              % (entity_id, prev_period, self.COOLDOWN_PERIODS))}
+
     def _advance(self, why) -> Decision:
         self._reset_period()
         return Decision(tool="advance_period", args={"note": why}, decision="wait",
@@ -133,6 +144,7 @@ class RulePolicy:
                             and worst["ctr_vs_rest"]["verdict"] == "significant"
                             and worst["clicks"] >= env.limits.min_clicks_for_pause
                             and self._cool(worst["entity_id"], briefing["period"])):
+                        prev = self.last_changed.get(worst["entity_id"])
                         self.last_changed[worst["entity_id"]] = briefing["period"]
                         self.last_changed[self.suspect["ad_set_id"]] = briefing["period"]
                         return Decision(
@@ -145,7 +157,18 @@ class RulePolicy:
                                   "expected_effect": {
                                       "entity_id": self.suspect["ad_set_id"],
                                       "metric": "cpa", "direction": "decrease",
-                                      "magnitude_pct": 15, "periods": 2}},
+                                      "magnitude_pct": 15, "periods": 2},
+                                  "considered_alternative": {
+                                      "level": "ad_set",
+                                      "summary": "cut %s's overall budget instead of "
+                                                 "pausing one creative"
+                                                 % self.suspect["ad_set_id"],
+                                      "why_rejected": "the CTR gap is significant at the "
+                                                      "creative level (p<0.05) while the "
+                                                      "sibling creative still performs, so "
+                                                      "a whole-ad-set cut would sacrifice "
+                                                      "good spend too"},
+                                  "pattern_check": self._pattern_check(worst["entity_id"], prev)},
                             decision="act",
                             observation="Pausing the weakest creative in %s."
                                         % self.suspect["ad_set_id"])
@@ -161,6 +184,7 @@ class RulePolicy:
                 new_budget = round(cand["daily_budget"] * (1 - self.CUT_PCT), 2)
                 if new_budget >= env.limits.min_daily_budget:
                     self.cut_made = True
+                    prev = self.last_changed.get(cand["ad_set_id"])
                     self.last_changed[cand["ad_set_id"]] = briefing["period"]
                     return Decision(
                         tool="set_budget",
@@ -171,7 +195,19 @@ class RulePolicy:
                                                                  target)),
                               "expected_effect": {"entity_id": cand["ad_set_id"],
                                                   "metric": "cpa", "direction": "decrease",
-                                                  "magnitude_pct": 12, "periods": 2}},
+                                                  "magnitude_pct": 12, "periods": 2},
+                              "considered_alternative": {
+                                  "level": "creative",
+                                  "summary": "pause or test a single creative in %s "
+                                             "instead of cutting the whole ad set"
+                                             % cand["ad_set_id"],
+                                  "why_rejected": "this rule does not evaluate "
+                                                  "creative-level significance before "
+                                                  "cutting an ad set; it always acts at "
+                                                  "the ad-set level once an ad set clears "
+                                                  "the CPA threshold, which is a known "
+                                                  "limitation of this deterministic policy"},
+                              "pattern_check": self._pattern_check(cand["ad_set_id"], prev)},
                         decision="act",
                         observation="Cutting budget on %s." % cand["ad_set_id"])
             return self.decide(env, briefing, recent, [], note)
@@ -189,6 +225,7 @@ class RulePolicy:
                 if good:
                     win = good[0]
                     new_budget = round(win["daily_budget"] * (1 + self.RAISE_PCT), 2)
+                    prev = self.last_changed.get(win["ad_set_id"])
                     self.last_changed[win["ad_set_id"]] = briefing["period"]
                     return Decision(
                         tool="set_budget",
@@ -199,7 +236,18 @@ class RulePolicy:
                               "expected_effect": {"entity_id": win["ad_set_id"],
                                                   "metric": "conversions",
                                                   "direction": "increase",
-                                                  "magnitude_pct": 12, "periods": 2}},
+                                                  "magnitude_pct": 12, "periods": 2},
+                              "considered_alternative": {
+                                  "level": "creative",
+                                  "summary": "launch a creative test in %s instead of "
+                                             "raising its overall budget"
+                                             % win["ad_set_id"],
+                                  "why_rejected": "the ad set's aggregate CPA is already "
+                                                  "below target with adequate data and no "
+                                                  "sign of a creative-specific ceiling, so "
+                                                  "scaling the whole ad set is the more "
+                                                  "direct lever"},
+                              "pattern_check": self._pattern_check(win["ad_set_id"], prev)},
                         decision="act",
                         observation="Scaling the best-performing ad set %s."
                                     % win["ad_set_id"])
@@ -290,16 +338,35 @@ class OraclePolicy:
         kind, spec = self.queue.pop(0)
         eff = {"entity_id": spec.get("entity_id", spec.get("ad_set_id")),
                "metric": "cpa", "direction": "decrease", "magnitude_pct": 12, "periods": 2}
+        # Boilerplate deliberation: the oracle is a fixed, pre-validated evaluation
+        # plan, not an adaptive policy, so its "consideration" is honestly static --
+        # it exists only so the oracle passes through the same guardrail layer as
+        # every other policy (see DECISIONS.md D6: one runtime, one tool layer).
+        pattern_check = {"similar_past_action": "none",
+                         "reasoning": "oracle plan step; not adaptive"}
         if kind in ("cut", "raise"):
             aid = spec["entity_id"]
             cur = env.account.ad_sets[aid].daily_budget
             factor = (1 - spec["pct"]) if kind == "cut" else (1 + spec["pct"])
             if kind == "raise":
                 eff = dict(eff, metric="conversions", direction="increase")
+            alt = {"level": "creative",
+                  "summary": "act on a single creative in %s instead" % aid,
+                  "why_rejected": "oracle applies a fixed, pre-validated ad-set-level "
+                                  "evaluation plan for this scenario"}
             return Decision(tool="set_budget",
                             args={"entity_id": aid,
                                   "new_daily_budget": round(cur * factor, 2),
-                                  "rationale": "oracle plan", "expected_effect": eff},
+                                  "rationale": "oracle plan", "expected_effect": eff,
+                                  "considered_alternative": alt,
+                                  "pattern_check": pattern_check},
                             decision="act")
+        alt = {"level": "ad_set",
+              "summary": "act on the whole ad set's budget instead of the creative",
+              "why_rejected": "oracle applies a fixed, pre-validated creative-level "
+                              "evaluation plan for this scenario"}
         return Decision(tool=kind, args=dict(spec, rationale="oracle plan",
-                                             expected_effect=eff), decision="act")
+                                             expected_effect=eff,
+                                             considered_alternative=alt,
+                                             pattern_check=pattern_check),
+                        decision="act")

@@ -16,10 +16,20 @@ def env(key="S1_creative_fatigue", seed=5):
     return AdAccountEnv(SC.get(key), seed=seed)
 
 
+ALT = {"level": "creative", "summary": "pause a specific creative instead",
+      "why_rejected": "the aggregate ad-set evidence is what supports this action"}
+PAT = {"similar_past_action": "none", "reasoning": "no prior action of this shape"}
+ACTION_TOOLS = ("set_budget", "set_status", "launch_creative_test")
+
+
 def j(tool, args=None, decision="act", obs="x"):
+    args = dict(args or {})
+    if tool in ACTION_TOOLS:
+        args.setdefault("considered_alternative", ALT)
+        args.setdefault("pattern_check", PAT)
     return json.dumps({"observation": obs, "hypotheses": [{"cause": "c", "evidence": "e",
                                                            "confidence": 0.7}],
-                       "decision": decision, "tool": tool, "args": args or {}})
+                       "decision": decision, "tool": tool, "args": args})
 
 
 class TestParsing(unittest.TestCase):
@@ -66,6 +76,19 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertIn("learning phase", SYSTEM_PROMPT)
         self.assertIn("Waiting is a legitimate decision", SYSTEM_PROMPT)
 
+    def test_states_both_levels_are_given_by_default(self):
+        """Post-mortem fix #1: the prompt must not imply creative data requires a
+        tool call to see."""
+        self.assertIn("ad-set-level table and a creative-level table", SYSTEM_PROMPT)
+
+    def test_requires_considered_alternative_and_pattern_check(self):
+        """Post-mortem fixes #2/#3: both deliberation objects must be documented as
+        required, and the prompt must not force a particular level to win."""
+        self.assertIn("considered_alternative", SYSTEM_PROMPT)
+        self.assertIn("pattern_check", SYSTEM_PROMPT)
+        self.assertIn("does not mean the alternative has to lose", SYSTEM_PROMPT)
+        self.assertIn("does not forbid repeating an action type", SYSTEM_PROMPT)
+
 
 class TestAgentRuntime(unittest.TestCase):
     def run_with(self, responses, key="S1_creative_fatigue", seed=5, max_steps=60):
@@ -89,6 +112,9 @@ class TestAgentRuntime(unittest.TestCase):
                                "expected_effect": {"entity_id": "as_lal", "metric": "cpa",
                                                    "direction": "decrease",
                                                    "magnitude_pct": 10, "periods": 2}})
+        # (considered_alternative / pattern_check are auto-filled by j() so this
+        # rejection isolates the budget-step guardrail, not the deliberation one --
+        # see TestDeliberationGuardrails below for those checks in isolation)
         e, backend, log = self.run_with([bad] + [j("advance_period", {"note": "n"})] * 8)
         self.assertEqual(log.steps[0].error_code, "budget_step_too_large")
         self.assertIn("budget_step_too_large", backend.prompts[1][1])
@@ -147,6 +173,72 @@ class TestAgentRuntime(unittest.TestCase):
         for key in SC.keys():
             self.assertNotIn(key, blob)
         self.assertNotIn("fatigue", blob.lower())
+
+
+class TestDeliberationGuardrailsEndToEnd(unittest.TestCase):
+    """Post-mortem fixes #2/#3, exercised through the full LLM policy + runtime, not
+    just guardrails.check() in isolation (see TestGuardrails in test_core.py)."""
+
+    def run_with(self, responses, key="S1_creative_fatigue", seed=5, max_steps=60):
+        e = env(key, seed)
+        backend = ScriptedBackend(responses)
+        pol = policies.LLMPolicy(backend)
+        return e, backend, runtime.run_episode(e, pol, max_steps=max_steps)
+
+    def test_missing_considered_alternative_is_rejected_and_action_not_applied(self):
+        args = {"entity_id": "as_lal", "new_daily_budget": 100, "rationale": "r",
+                "expected_effect": {"entity_id": "as_lal", "metric": "cpa",
+                                    "direction": "decrease", "magnitude_pct": 10,
+                                    "periods": 2},
+                "pattern_check": PAT}   # considered_alternative deliberately omitted
+        bad = json.dumps({"observation": "o", "hypotheses": [], "decision": "act",
+                          "tool": "set_budget", "args": args})
+        e, backend, log = self.run_with([bad] + [j("advance_period", {"note": "n"})] * 8)
+        self.assertEqual(log.steps[0].error_code, "alternative_not_considered")
+        self.assertEqual(e.account.ad_sets["as_lal"].daily_budget, 95.0)
+
+    def test_missing_pattern_check_is_rejected_and_action_not_applied(self):
+        args = {"entity_id": "as_lal", "new_daily_budget": 100, "rationale": "r",
+                "expected_effect": {"entity_id": "as_lal", "metric": "cpa",
+                                    "direction": "decrease", "magnitude_pct": 10,
+                                    "periods": 2},
+                "considered_alternative": ALT}   # pattern_check deliberately omitted
+        bad = json.dumps({"observation": "o", "hypotheses": [], "decision": "act",
+                          "tool": "set_budget", "args": args})
+        e, backend, log = self.run_with([bad] + [j("advance_period", {"note": "n"})] * 8)
+        self.assertEqual(log.steps[0].error_code, "pattern_check_missing")
+        self.assertEqual(e.account.ad_sets["as_lal"].daily_budget, 95.0)
+
+    def test_deliberation_does_not_force_a_particular_level(self):
+        """A creative-level action with a plausible ad_set-level alternative must be
+        just as acceptable as the reverse -- the guardrail checks the field exists
+        and is non-empty, never which level was chosen."""
+        act = j("set_status", {"entity_id": "cr_broad_a", "status": "paused",
+                               "rationale": "r",
+                               "expected_effect": {"entity_id": "as_broad", "metric": "cpa",
+                                                   "direction": "decrease",
+                                                   "magnitude_pct": 10, "periods": 2}})
+        e, backend, log = self.run_with([act] + [j("advance_period", {"note": "n"})] * 8)
+        self.assertTrue(log.steps[0].ok, log.steps[0].error)
+
+    def test_contradicted_action_becomes_prominently_salient_in_the_next_prompt(self):
+        """Post-mortem fix #3: a CONTRADICTED verdict must be hard to miss in the
+        very next decision, not just present somewhere in a large JSON blob."""
+        cut = j("set_budget", {"entity_id": "as_lal", "new_daily_budget":
+                               round(95.0 * 0.8, 2), "rationale": "r",
+                               "expected_effect": {"entity_id": "as_lal", "metric": "spend",
+                                                   "direction": "increase",
+                                                   "magnitude_pct": 10, "periods": 1}})
+        e, backend, log = self.run_with(
+            [cut, j("advance_period", {"note": "n"})] +
+            [j("advance_period", {"note": "n"})] * 8, seed=1)
+        # prompts[0] = before the cut, prompts[1] = right after (verdict still
+        # pending), prompts[2] = one period later, once the effect has resolved
+        self.assertGreaterEqual(len(backend.prompts), 3)
+        third_prompt = backend.prompts[2][1]
+        self.assertIn("PRIOR ACTIONS AND THEIR MEASURED OUTCOMES", third_prompt)
+        self.assertIn("CONTRADICTED", third_prompt)
+        self.assertIn("did NOT confirm as expected", third_prompt)
 
 
 class TestPolicyParity(unittest.TestCase):
