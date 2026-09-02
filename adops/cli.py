@@ -8,7 +8,7 @@ import sys
 from typing import List
 
 from . import brief as B
-from . import dataio, evaluate as E, policies as P, runtime, scenarios as SC
+from . import dataio, evaluate as E, policies as P, report, runtime, scenarios as SC
 from .env import AdAccountEnv
 from .llm import get_backend
 
@@ -97,13 +97,15 @@ def cmd_run(args) -> int:
     print("\nfinal state:")
     print_briefing(env)
     print("\nscore: %s" % json.dumps(log.score, indent=1))
-    if args.save:
+    if args.save or args.report:
         os.makedirs(RUNS_DIR, exist_ok=True)
-        path = os.path.join(RUNS_DIR, "run_%s_%s_seed%d.json"
-                            % (args.scenario, args.policy, args.seed))
-        with open(path, "w") as fh:
-            json.dump(log.to_dict(), fh, indent=1)
-        print("\nsaved %s" % path)
+        stem = "run_%s_%s_seed%d" % (args.scenario, args.policy, args.seed)
+        d = log.to_dict()
+        with open(os.path.join(RUNS_DIR, stem + ".json"), "w") as fh:
+            json.dump(d, fh, indent=1)
+        report.write(os.path.join(RUNS_DIR, stem + ".txt"), report.narrative(d))
+        report.write(os.path.join(RUNS_DIR, stem + ".html"), report.run_html(d))
+        print("\nsaved %s/%s.{json,txt,html}" % (RUNS_DIR, stem))
     return 0
 
 
@@ -130,7 +132,10 @@ def cmd_eval(args) -> int:
                           out_dir=args.out, verbose=args.verbose)
     print(E.format_table(result))
     if args.out:
-        print("\nwrote %s/evaluation.json and %s/run_logs.json" % (args.out, args.out))
+        report.write(os.path.join(args.out, "evaluation.html"),
+                     report.evaluation_html(result))
+        print("\nwrote %s/evaluation.json, run_logs.json and evaluation.html"
+              % args.out)
     return 0
 
 
@@ -186,6 +191,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--model", default="sonnet")
     q.add_argument("--max-llm-calls", type=int, default=70, dest="max_llm_calls")
     q.add_argument("--save", action="store_true")
+    q.add_argument("--report", action="store_true",
+                   help="also write a text and HTML run report")
     q.set_defaults(func=cmd_run)
 
     q = sub.add_parser("eval", help="run the seeded evaluation matrix")
