@@ -77,3 +77,26 @@ D12 Post-mortem fixes (S1_creative_fatigue seed 1, see prior turn's diagnosis):
     S1-S3 by construction (it applies a pre-known fix without investigating), so
     its diagnosis_hit is also False even though acted_on_mechanism is always True.
     This is intentional and documented, not a bug -- see PROJECT_STATE.md.
+
+D13 Statistical-power guidance added to SYSTEM_PROMPT (S1 seed-1 failure analysis).
+    Root cause identified: the agent required CVR/CPA significance as a precondition
+    for a creative-level action, but CVR/CPA is systematically underpowered relative
+    to CTR/CPC at the same sample size (clicks vastly outnumber conversions), so this
+    is an evidentiary bar the true mechanism often cannot clear even when it is real.
+    Fix: one general, scenario-agnostic paragraph in SYSTEM_PROMPT explaining that
+    different metrics reach significance at different sample sizes and that a
+    non-significant CVR/CPA read should not automatically veto a significant,
+    higher-volume CTR/CPC signal. Deliberately does NOT force a creative-level
+    action, does NOT say "always investigate creatives first", and names no
+    scenario or entity -- it is a statistics lesson, not an encoded answer.
+    Scope: prompt-only. Simulator, tools, guardrails, action semantics, objective
+    function, evaluation architecture and runtime were not touched. Deterministic
+    policies (noop/rules/oracle) never read SYSTEM_PROMPT, so their scores are
+    verified byte-identical to before this change (confirmed for seed 1 across all
+    4 scenarios). 98 tests pass, incl. 3 new tests asserting the guidance is
+    present, does not force a level/action, and names no scenario or entity.
+    A second, separate contributing factor was identified but NOT addressed here:
+    `set_budget` below the 20% learning-phase threshold is the only zero-cost action
+    in the whole action space, which independently biases the agent toward small
+    ad-set nudges regardless of evidence. Left as a documented, deferred lever --
+    fixing it would touch env.py mechanics, outside this change's scope.

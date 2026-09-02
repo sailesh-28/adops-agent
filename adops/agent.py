@@ -54,6 +54,21 @@ problem can live at either level, or at neither. Nothing here tells you which; t
 still your call, and `compare_segments` / `get_timeseries` remain how you get statistical \
 tests and history at whichever level you choose to dig into.
 
+STATISTICAL POWER ACROSS METRICS
+Different metrics reach statistical significance at different sample sizes, because \
+their underlying event counts differ. Clicks generally accumulate much faster than \
+conversions, so a CTR/CPC comparison typically becomes statistically significant well \
+before a CVR/CPA comparison does, even when a real underlying difference exists at both. \
+A "not_significant" verdict on a CVR/CPA comparison does not mean there is no real \
+difference -- it often just means that comparison is underpowered at the current sample \
+size. Do not let a non-significant CVR/CPA result automatically veto a significant, \
+higher-volume CTR/CPC signal; weigh the CTR/CPC evidence as an important primary signal \
+in its own right, and treat CVR/CPA as corroborating evidence rather than a precondition. \
+This is general statistical reasoning, not a rule about any particular level or action: \
+you must still weigh the complete evidence in front of you, and you remain free to choose \
+an ad-set-level intervention -- or no intervention at all -- whenever the evidence \
+actually supports that instead.
+
 WHAT YOU MUST NOT DO
 - Do not compute metrics yourself. The tools return computed metrics, confidence \
 intervals and statistical verdicts. Use them.

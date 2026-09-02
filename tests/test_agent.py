@@ -89,6 +89,38 @@ class TestSystemPrompt(unittest.TestCase):
         self.assertIn("does not mean the alternative has to lose", SYSTEM_PROMPT)
         self.assertIn("does not forbid repeating an action type", SYSTEM_PROMPT)
 
+    def test_states_the_statistical_power_principle(self):
+        """S1 seed-1 failure-analysis fix: clicks outnumber conversions, so a
+        non-significant CVR/CPA read must not automatically veto a significant
+        CTR/CPC signal. Must be phrased generally -- no scenario or entity names."""
+        self.assertIn("STATISTICAL POWER", SYSTEM_PROMPT)
+        self.assertIn("Clicks generally accumulate much faster than conversions",
+                      SYSTEM_PROMPT)
+        self.assertIn("CTR/CPC comparison", SYSTEM_PROMPT)
+        self.assertIn("CVR/CPA", SYSTEM_PROMPT)
+        self.assertIn("Do not let a non-significant CVR/CPA result automatically veto",
+                      SYSTEM_PROMPT)
+
+    def test_statistical_power_guidance_does_not_force_a_level_or_action(self):
+        """Must not read as 'always investigate/act on creatives first' -- it has to
+        leave the ad-set level and inaction both explicitly available."""
+        section_start = SYSTEM_PROMPT.index("STATISTICAL POWER")
+        section_end = SYSTEM_PROMPT.index("WHAT YOU MUST NOT DO")
+        section = SYSTEM_PROMPT[section_start:section_end]
+        self.assertIn("remain free to choose an ad-set-level intervention", section)
+        self.assertIn("no intervention at all", section)
+        for banned in ("always investigate creatives first", "always pause",
+                      "must act on the creative"):
+            self.assertNotIn(banned, section.lower())
+
+    def test_statistical_power_guidance_is_scenario_and_entity_agnostic(self):
+        """Must teach the principle, not encode the current scenario's answer."""
+        forbidden = ("house of bastar", "s1_creative_fatigue", "cr_broad_a", "as_broad",
+                    "pause the creative", "pause cr_broad")
+        blob = SYSTEM_PROMPT.lower()
+        for term in forbidden:
+            self.assertNotIn(term, blob)
+
 
 class TestAgentRuntime(unittest.TestCase):
     def run_with(self, responses, key="S1_creative_fatigue", seed=5, max_steps=60):

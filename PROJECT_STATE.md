@@ -49,29 +49,35 @@ reward correct diagnosis. The rules baseline loses because it chases noisy CPA o
 and re-scales retargeting into saturation -- a real failure mode, not a strawman.
 There is therefore genuine headroom between `rules` and `oracle` for the agent to occupy.
 
-## Post-mortem fixes applied (this turn)
-Implemented all 4 fixes from the S1_creative_fatigue seed-1 post-mortem: creative
-context in the default briefing, guardrail-enforced considered_alternative /
-pattern_check on every consequential action (all policies, not just LLM), prose
-salience of contradicted/partial outcomes in the prompt, and a general mechanism-
-level diagnosis metric (`evaluate.mechanism_diagnosis`) replacing the old
-entity-touch-only `diagnosis_hit`. Full details in DECISIONS.md D12.
+## Post-mortem fixes applied (fixes #1-4, prior turn)
+Creative context in the default briefing, guardrail-enforced considered_alternative /
+pattern_check on every consequential action, prose salience of contradicted/partial
+outcomes, and a general mechanism-level diagnosis metric. See DECISIONS.md D12.
 
-95 deterministic tests pass (`python3 -m unittest discover -s tests -q`), including
-a regression test that re-scores the actual saved S1 seed-1 LLM trace from the
-post-mortem and confirms the fixed metric now reports it as a miss.
+Result: the fixes visibly changed agent behaviour (investigated the creative level
+immediately, named the correct hypothesis, generalised across contradicted verdicts
+to stop acting) but the agent still did not act on the creative level -- see failure
+analysis below.
 
-No LLM evaluation has been run since the fixes landed -- awaiting approval.
+## Failure analysis + statistical-power fix (this turn)
+Root cause: the agent required CVR/CPA statistical significance before it would
+consider a creative-level action, but CVR/CPA is structurally underpowered relative
+to CTR/CPC at equal sample size in this environment (and in real ad accounts).
+Fix: one scenario-agnostic statistical-power paragraph added to SYSTEM_PROMPT (see
+DECISIONS.md D13). Prompt-only change -- no simulator, tool, guardrail, action-
+semantics, objective, evaluation, or runtime change.
 
-## Known/documented limitation
-OraclePolicy never calls a read tool (it applies a pre-known fix), so
-`investigated_correct_level` is False for it on S1-S3 and its `diagnosis_hit` is
-therefore also False despite `acted_on_mechanism` always being True. This is
-correct behaviour for a metric that is honest about what "diagnosis" means, not a
-bug -- `acted_on_mechanism_rate` is the number to read for the oracle specifically.
+98 deterministic tests pass. Deterministic policies (noop/rules/oracle) verified
+byte-identical to pre-change scores (they never read SYSTEM_PROMPT). 3 new tests
+lock in that the guidance is present, does not force a level or action, and names
+no scenario or entity.
+
+A second contributing factor (the 20%-threshold learning-phase cost asymmetry makes
+sub-threshold budget nudges the only zero-cost action) was identified but
+deliberately NOT addressed -- flagged as a separate, deferred lever.
 
 ## Next
-- Await approval, then run `python3 -m adops run --policy llm --report` on
-  S1_creative_fatigue seed 1 again and compare against this turn's fixes.
-- If the creative-level blind spot persists, the next lever is prompt emphasis
-  (fix #1 made the data available; it did not force the model to look).
+Awaiting approval for a controlled S1_creative_fatigue seed-1 LLM re-run to test
+whether the statistical-power guidance changes acted_on_mechanism / diagnosis_hit,
+per the evaluation protocol proposed in the failure analysis (multi-seed, plus a
+placebo check on S2/S3/S4 to rule out an unwanted creative-eagerness bias).
