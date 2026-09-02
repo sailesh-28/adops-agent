@@ -1,0 +1,12 @@
+# TODO
+- [x] STEP 1 LLM runtime feasibility test (blocked on one-time `claude setup-token`)
+- [x] STEP 2 repo memory files
+- [x] STEP 3 simulator + data model
+- [x] STEP 4 tool layer + guardrails
+- [x] STEP 5 test the simulator independently (33 tests green)
+- [ ] STEP 6 agent + model-provider abstraction
+- [ ] STEP 7 run the agent against the simulator
+- [ ] STEP 8 baseline policies (noop, rules)
+- [ ] STEP 9 evaluation harness across seeded scenarios
+- [ ] STEP 10 CLI
+- [ ] STEP 11 CSV export/ingest + run report
