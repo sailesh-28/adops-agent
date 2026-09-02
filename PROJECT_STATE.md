@@ -1,6 +1,7 @@
 # PROJECT_STATE
 
-Updated: after STEP 5 (simulator + tools + guardrails tested).
+Updated: after STEP 11. Everything works except a real-model agent run,
+which is blocked on a one-time `claude setup-token` login.
 
 ## Done
 - Repo memory files, package skeleton, git repo.
@@ -34,6 +35,21 @@ Updated: after STEP 5 (simulator + tools + guardrails tested).
 `hash()` on str is salted per process -> seeds were not reproducible across runs.
 Now uses `zlib.crc32`. Never reintroduce `hash()` for seeding.
 
+## Baseline results (6 seeds, deterministic, reproducible)
+objective_score, lift vs do-nothing:
+| scenario | noop | rules | oracle |
+|---|---|---|---|
+| S1_creative_fatigue | 519.1 | 495.8 (-4.5%) | 596.8 (+15.0%) |
+| S2_audience_saturation | 459.7 | 487.4 (+6.0%) | 508.3 (+10.6%) |
+| S3_misallocation | 446.8 | 442.3 (-1.0%) | 481.6 (+7.8%) |
+| S4_noise_trap | 551.8 | 507.0 (-8.1%) | 551.8 (0.0%) |
+
+The oracle beating noop on S1-S3 is the environment-validity check: the scenarios do
+reward correct diagnosis. The rules baseline loses because it chases noisy CPA outliers
+and re-scales retargeting into saturation -- a real failure mode, not a strawman.
+There is therefore genuine headroom between `rules` and `oracle` for the agent to occupy.
+
 ## Next
-STEP 6 agent + LLM backend abstraction -> STEP 7 run -> STEP 8 baselines ->
-STEP 9 evaluation -> STEP 10 CLI -> STEP 11 report.
+- `claude setup-token`, then `python3 -m adops run --policy llm --report`
+- iterate on the prompt from real traces; add `llm` to the evaluation matrix
+- optional: a second reporting pass once agent traces exist
