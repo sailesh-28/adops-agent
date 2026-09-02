@@ -83,6 +83,8 @@ class Scenario:
     creative_overrides: Dict[str, dict] = field(default_factory=dict)
     burn_in_periods: int = 12
     eval_include: bool = True
+    # entities where a correct intervention would land; evaluation-only, never shown
+    on_target_entities: List[str] = field(default_factory=list)
 
 
 def _objective(target_cpa: float, daily_total: float, horizon: int = 6) -> Objective:
@@ -141,6 +143,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "targeting and audience are healthy. Cutting budget suppresses volume "
                      "without fixing efficiency."),
         correct_action_family=["pause_creative:cr_broad_a", "creative_test:as_broad"],
+        on_target_entities=["cr_broad_a", "as_broad"],
         objective=_objective(37.0, 480.0),
         budget_overrides={"as_broad": 150.0, "as_interior": 60.0, "as_seas_broad": 43.0},
         # as_broad's capacity is raised to match its larger budget, so the only defect
@@ -155,6 +158,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "Exposure persists (low refresh), so CPM inflates and CVR degrades. "
                      "Both creatives are healthy -- pausing one does not help."),
         correct_action_family=["cut_budget:as_cart"],
+        on_target_entities=["as_cart"],
         objective=_objective(41.0, 530.0),
         budget_overrides={"as_cart": 95.0},
         ad_set_overrides={"as_cart": dict(decay=0.80)},
@@ -166,6 +170,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "third of its budget. No fatigue, no saturation, no trend -- the "
                      "signal is purely cross-sectional and statistically detectable."),
         correct_action_family=["shift_budget:as_interior->as_lal"],
+        on_target_entities=["as_interior", "as_lal"],
         objective=_objective(39.0, 495.0),
         budget_overrides={"as_lal": 35.0, "as_interior": 155.0},
         ad_set_overrides={"as_interior": dict(base_cvr=0.0140)},
@@ -177,6 +182,7 @@ SCENARIOS: Dict[str, Scenario] = {
                      "noise and mean-reverts. The correct behaviour is restraint: every "
                      "structural edit costs a learning-phase penalty for nothing."),
         correct_action_family=["none"],
+        on_target_entities=[],
         objective=_objective(38.0, 480.0),
         ad_set_overrides=_flat_prospecting(),
         creative_overrides=_flat_creatives(),

@@ -246,11 +246,17 @@ class AdAccountEnv:
                 "note": "New creative quality is unknown until it accumulates data."}
 
     # ------------------------------------------- expected vs realised effect
+    ADDITIVE_METRICS = ("conversions", "spend", "clicks", "impressions", "revenue")
+
     def _metric_value(self, entity_id: str, metric: str, first: int, last: int) -> Optional[float]:
+        """Additive metrics are normalised per period so that a 3-period baseline is
+        comparable with a 2-period outcome window. Ratio metrics need no adjustment."""
         agg = self.entity_metrics(entity_id, first, last)
-        if metric in ("conversions", "spend", "clicks", "impressions", "revenue"):
-            return agg.get(metric)
-        return agg.get(metric)
+        value = agg.get(metric)
+        if value is not None and metric in self.ADDITIVE_METRICS:
+            periods = max(1, last - first + 1)
+            return value / float(periods)
+        return value
 
     def _effect_baseline(self, entity_id: str, metric: str) -> dict:
         first, last = max(1, self.period - 2), self.period
