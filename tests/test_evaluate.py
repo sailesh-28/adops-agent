@@ -227,26 +227,32 @@ class TestMechanismDiagnosis(unittest.TestCase):
 
 
 class TestReplaysPriorSavedTrace(unittest.TestCase):
-    """Regression check against the actual saved S1 seed-1 LLM trace from the
-    post-mortem -- re-scored offline with the fixed metric, no new LLM call."""
+    """Regression check for the original S1 seed-1 post-mortem finding: a trace that
+    only ever investigates and acts at the ad-set level must score as a miss.
+    Self-contained fixture (the steps below mirror that trace's tool calls) so the
+    test does not depend on a mutable, gitignored runs/ file."""
 
-    def test_prior_trace_is_now_correctly_scored_as_a_miss(self):
-        import os
-        path = "runs/run_S1_creative_fatigue_llm_seed1.json"
-        if not os.path.exists(path):
-            self.skipTest("saved trace not present in this checkout")
-        with open(path) as fh:
-            d = json.load(fh)
-        steps = [SimpleNamespace(tool=s["tool"], args=s["args"], ok=s["ok"])
-                for s in d["steps"]]
-        log = SimpleNamespace(steps=steps, ledger=d["ledger"])
+    STEPS = [
+        ("compare_segments", {"level": "ad_set", "lookback_periods": 3}),
+        ("get_timeseries", {"entity_id": "as_broad", "periods": 8}),
+        ("set_budget", {"entity_id": "as_broad", "new_daily_budget": 125.0}),
+        ("set_budget", {"entity_id": "as_rt30", "new_daily_budget": 59.0}),
+        ("compare_segments", {"level": "ad_set", "parent_id": "cmp_seasonal"}),
+        ("set_budget", {"entity_id": "as_seas_broad", "new_daily_budget": 35.0}),
+        ("set_status", {"entity_id": "as_seas_broad", "status": "paused"}),
+        ("set_budget", {"entity_id": "as_lal", "new_daily_budget": 113.0}),
+    ]
+
+    def test_ad_set_only_trace_is_scored_as_a_miss(self):
+        steps = [SimpleNamespace(tool=t, args=a, ok=True) for t, a in self.STEPS]
+        log = SimpleNamespace(steps=steps, ledger=[])
         scenario = SC.get("S1_creative_fatigue")
-        e = env("S1_creative_fatigue", seed=d["seed"])
+        e = env("S1_creative_fatigue", seed=1)
         mech = E.mechanism_diagnosis(scenario, e, log)
         self.assertFalse(mech["diagnosis_hit"])
         self.assertFalse(mech["acted_on_mechanism"],
-                         "the agent never paused cr_broad_a or tested a new creative "
-                         "in as_broad in this trace")
+                         "touching as_broad with a budget cut is not the mechanism: the "
+                         "correct fix is pausing cr_broad_a or testing a new creative")
 
 
 class TestReproducibility(unittest.TestCase):

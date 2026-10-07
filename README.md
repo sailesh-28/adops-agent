@@ -16,7 +16,7 @@ architecture change.
 
 ## Quick start
 ```bash
-python3 -m unittest discover -s tests -q          # 60 tests
+python3 -m unittest discover -s tests -q          # 98 tests
 python3 -m adops sim --scenario S1_creative_fatigue --seed 1
 python3 -m adops run --scenario S1_creative_fatigue --seed 1 --policy rules --report
 python3 -m adops eval --policies noop,rules,oracle --seeds 5
