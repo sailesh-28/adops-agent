@@ -5,7 +5,7 @@ import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, "/Users/sailesh/performance-marketing-agent")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adops import dataio, metrics as M, scenarios as SC
 from adops.env import AdAccountEnv

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 
-sys.path.insert(0, "/Users/sailesh/performance-marketing-agent")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adops import policies, runtime, scenarios as SC, tools
 from adops.agent import SYSTEM_PROMPT, Decision, decide, extract_json, validate_decision

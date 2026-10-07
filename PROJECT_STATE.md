@@ -76,8 +76,13 @@ A second contributing factor (the 20%-threshold learning-phase cost asymmetry ma
 sub-threshold budget nudges the only zero-cost action) was identified but
 deliberately NOT addressed -- flagged as a separate, deferred lever.
 
+## Latest controlled retest (S1_creative_fatigue, seed 1, llm policy)
+After the statistical-power fix the agent paused the specific fatigued creative
+(mechanism-level diagnosis hit), all 4 stated effects confirmed, 0 constraint
+violations: conversions 555.0, CPA 36.56 (target 37.0), score 555.0 vs noop 507.8,
+rules 459.2, oracle 572.0. Single seed only -- not yet a multi-seed claim.
+
 ## Next
-Awaiting approval for a controlled S1_creative_fatigue seed-1 LLM re-run to test
-whether the statistical-power guidance changes acted_on_mechanism / diagnosis_hit,
-per the evaluation protocol proposed in the failure analysis (multi-seed, plus a
-placebo check on S2/S3/S4 to rule out an unwanted creative-eagerness bias).
+- Multi-seed LLM validation of the fix, plus a placebo check on S2/S3/S4 to rule
+  out an unwanted creative-eagerness bias.
+- Deferred lever: sub-20% budget nudges are the only zero-learning-cost action.

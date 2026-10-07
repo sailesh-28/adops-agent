@@ -9,6 +9,7 @@
 - [x] STEP 9 evaluation harness across seeded scenarios
 - [x] STEP 10 CLI
 - [x] STEP 11 CSV export/ingest + text/HTML run report
-- [ ] STEP 7 run the agent against a real model  <-- BLOCKED: needs `claude setup-token`
-      (one-time interactive browser login; uses the existing subscription, no billing)
-- [ ] after auth: tune the agent prompt against real traces, then add `llm` to the matrix
+- [x] STEP 7 run the agent against a real model (Claude Code CLI, existing subscription)
+- [x] failure analysis + prompt fix, S1 seed-1 retest (mechanism-level hit)
+- [ ] multi-seed LLM runs across S1-S4 and add `llm` to the evaluation matrix
+- [ ] placebo check: confirm the fix does not bias the agent toward creative actions

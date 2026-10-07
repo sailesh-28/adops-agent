@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import unittest
 from types import SimpleNamespace
 
-sys.path.insert(0, "/Users/sailesh/performance-marketing-agent")
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from adops import evaluate as E
 from adops import policies, runtime, scenarios as SC

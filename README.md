@@ -7,6 +7,25 @@ whether to act again or stop.
 
 Python 3.9+, **standard library only**. No paid API, no database, no server.
 
+> **Status: working prototype.** Runs only against a simulated account -- it is not
+> connected to Meta, Google or any real advertising platform. See
+> [`AdOps-Agent-Project-Evidence.pdf`](AdOps-Agent-Project-Evidence.pdf) for a 4-page
+> write-up with a real run trace.
+
+## Latest result (single run, not yet multi-seed)
+`S1_creative_fatigue`, seed 1, LLM policy: the agent investigated, paused the one
+fatigued creative, and all four of its stated expectations were confirmed.
+
+| policy | conversions | CPA (target 37.0) | actions | constraint breaches |
+|---|---|---|---|---|
+| do-nothing | 526.0 | 38.33 | 0 | 1 |
+| rule-based baseline | 501.0 | 40.37 | 8 | 1 |
+| **LLM agent** | **555.0** | **36.56** | 4 | **0** |
+| oracle (evaluation-only ceiling) | 572.0 | 35.24 | 2 | 0 |
+
+An earlier run on the same seed missed the creative-level cause; the iteration
+(failure analysis, one prompt change, retest) is documented in `DECISIONS.md`.
+
 ## Why a simulator
 An autonomous agent cannot be A/B tested on live ad spend, and a real account gives no
 counterfactual. The simulator holds **hidden ground truth** the agent can never inspect,
